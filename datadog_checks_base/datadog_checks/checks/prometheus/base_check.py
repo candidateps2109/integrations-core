@@ -7,17 +7,17 @@ from .mixins import PrometheusScraperMixin
 from .. import AgentCheck
 from ...errors import CheckException
 
-
+"""
 class PrometheusScraper(PrometheusScraperMixin):
-    """
+    \"""
     This class scrapes a prometheus endpoint and submits the metrics on behalf of a check. This class
     is used by checks that scrape more than one prometheus endpoint.
-    """
+    \"""
 
     def __init__(self, check):
         super(PrometheusScraper, self).__init__()
         self.check = check
-
+"""
 
 class GenericPrometheusCheck(PrometheusScraperMixin, AgentCheck):
     """
@@ -94,7 +94,7 @@ class GenericPrometheusCheck(PrometheusScraperMixin, AgentCheck):
         self.gauge('{}.{}'.format(self.NAMESPACE, metric_name), val, _tags, hostname=hostname)
 
     def _submit_monotonic_count(self, metric_name, val, metric, custom_tags=None, hostname=None):
-        """ 
+        """
         Submit a metric as a monotonic count, additional tags provided will be added to
         the ones from the label provided via the metrics object.
 

@@ -225,7 +225,7 @@ class PrometheusScraperMixin(object):
 
                 message = metrics_pb2.MetricFamily()
                 message.ParseFromString(msg_buf)
-                message.name = self._remove_metric_prefix(message.name)
+                message.name = self._remove_metric_prefix(message.name, scraper_config)
 
                 # Lookup type overrides:
                 if scraper_config['type_overrides'] and message.name in scraper_config['type_overrides']:
@@ -243,7 +243,7 @@ class PrometheusScraperMixin(object):
             obj_map = {}  # map of the types of each metrics
             obj_help = {}  # help for the metrics
             for metric in text_fd_to_metric_families(response.iter_lines(chunk_size=self.REQUESTS_CHUNK_SIZE)):
-                metric.name = self._remove_metric_prefix(metric.name)
+                metric.name = self._remove_metric_prefix(metric.name, scraper_config)
                 metric_name = '{}_bucket'.format(metric.name) if metric.type == 'histogram' else metric.name
                 metric_type = scraper_config['type_overrides'].get(metric_name, metric.type)
                 if metric_type == 'untyped' or metric_type not in self.METRIC_TYPES:
@@ -388,7 +388,7 @@ class PrometheusScraperMixin(object):
                 for metric, val in scraper_config['label_joins'].iteritems():
                     scraper_config['_watched_labels'].add(val['label_to_match'])
 
-            for metric in self._parse_metric_family(response):
+            for metric in self._parse_metric_family(response, scraper_config):
                 yield metric
 
             # Set dry run off
@@ -411,7 +411,7 @@ class PrometheusScraperMixin(object):
         automatically as additional custom tags and added to the metrics
         """
         for metric in self.scrape_metrics(endpoint, scraper_config):
-            self.process_metric(metric, ignore_unmapped=ignore_unmapped)
+            self.process_metric(metric, scraper_config, ignore_unmapped=ignore_unmapped)
 
     def _store_labels(self, message, scraper_config):
         # If targeted metric, store labels
@@ -460,13 +460,13 @@ class PrometheusScraperMixin(object):
         """
 
         # If targeted metric, store labels
-        self.store_labels(message)
+        self._store_labels(message, scraper_config)
 
         if message.name in scraper_config['ignore_metrics']:
             return  # Ignore the metric
 
         # Filter metric to see if we can enrich with joined labels
-        self._join_labels(message)
+        self._join_labels(message, scraper_config)
 
         send_histograms_buckets = scraper_config['send_histograms_buckets']
         send_monotonic_counter = scraper_config['send_histograms_buckets']
@@ -476,7 +476,8 @@ class PrometheusScraperMixin(object):
             return
 
         try:
-            self._submit(self.metrics_mapper[message.name], message, send_histograms_buckets, send_monotonic_counter, custom_tags)
+            metric_name = '{}.{}'.format(scraper_config['NAMESPACE'], scraper_config['metrics_mapper'][message.name])
+            self._submit(metric_name, message, scraper_config)
         except KeyError:
             if not ignore_unmapped:
                 if message.name in scraper_config['metric_transformer']:
@@ -495,7 +496,8 @@ class PrometheusScraperMixin(object):
                 # try matching wildcard (generic check)
                 for wildcard in scraper_config['_metrics_wildcards']:
                     if fnmatchcase(message.name, wildcard):
-                        self._submit(message.name, message, send_histograms_buckets, send_monotonic_counter, custom_tags)
+                        metric_name = '{}.{}'.format(scraper_config['NAMESPACE'], message.name)
+                        self._submit(metric_name, message, send_histograms_buckets, send_monotonic_counter, custom_tags)
 
     def poll(self, endpoint, scraper_config, pFormat=PrometheusFormat.PROTOBUF, headers=None):
         """
@@ -520,7 +522,7 @@ class PrometheusScraperMixin(object):
         service_check_name = '{}{}'.format(scraper_config['NAMESPACE'], '.prometheus.health')
         service_check_tags = scraper_config['custom_tags'] + ['endpoint:' + endpoint]
         try:
-            response = self.send_request(endpoint, pFormat, headers)
+            response = self.send_request(endpoint, scraper_config, pFormat, headers)
         except requests.exceptions.SSLError:
             self.log.error("Invalid SSL settings for requesting {} endpoint".format(endpoint))
             raise
@@ -566,9 +568,10 @@ class PrometheusScraperMixin(object):
         # Determine the SSL verification settings
         cert = None
         if isinstance(scraper_config['ssl_cert'], basestring):
-            cert = scraper_config['ssl_cert']
             if isinstance(scraper_config['ssl_private_key'], basestring):
                 cert = (scraper_config['ssl_cert'], scraper_config['ssl_private_key'])
+            else:
+                cert = scraper_config['ssl_cert']
         verify = True
         if isinstance(scraper_config['ssl_ca_cert'], basestring):
             verify = scraper_config['ssl_ca_cert']
@@ -597,11 +600,9 @@ class PrometheusScraperMixin(object):
         `custom_tags` is an array of 'tag:value' that will be added to the
         metric when sending the gauge to Datadog.
         """
-        send_histograms_buckets = scraper_config['send_histograms_buckets']
-
         if message.type < len(self.METRIC_TYPES):
             for metric in message.metric:
-                custom_hostname = self._get_hostname(hostname, metric)
+                custom_hostname = self._get_hostname(hostname, metric, scraper_config)
                 if message.type == 0:
                     val = getattr(metric, self.METRIC_TYPES[message.type]).value
                     if self._is_value_valid(val):
@@ -621,7 +622,8 @@ class PrometheusScraperMixin(object):
                 else:
                     val = getattr(metric, self.METRIC_TYPES[message.type]).value
                     if self._is_value_valid(val):
-                        if message.name in self.rate_metrics:
+                        tags = self._metric_tags(metric_name, val, metric, scraper_config, hostname=custom_hostname)
+                        if message.name in scraper_config['rate_metrics']:
                             self.rate(metric_name, val, tags=tags, hostname=custom_hostname)
                         else:
                             self.gauge(metric_name, val, tags=tags, hostname=custom_hostname)

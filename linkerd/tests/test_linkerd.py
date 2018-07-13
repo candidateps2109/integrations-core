@@ -541,11 +541,11 @@ def linkerd_fixture():
     with open(metrics_file_path, 'rb') as f:
         responses.append(f.read())
 
-    p = mock.patch('datadog_checks.checks.prometheus.PrometheusScraper.poll',
+    patch = mock.patch('datadog_checks.checks.prometheus.GenericPrometheusCheck.poll',
                    return_value=MockResponse(responses, 'text/plain'),
                    __name__="poll")
-    yield p.start()
-    p.stop()
+    with patch:
+        yield
 
 @pytest.fixture
 def aggregator():
