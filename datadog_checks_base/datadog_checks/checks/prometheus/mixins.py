@@ -526,7 +526,7 @@ class PrometheusScraperMixin(object):
             raise
         except IOError:
             if health_service_check:
-                self._submit_service_check(
+                self.service_check(
                     service_check_name,
                     AgentCheck.CRITICAL,
                     tags=service_check_tags
@@ -535,7 +535,7 @@ class PrometheusScraperMixin(object):
         try:
             response.raise_for_status()
             if health_service_check:
-                self._submit_service_check(
+                self.service_check(
                     service_check_name,
                     AgentCheck.OK,
                     tags=service_check_tags
@@ -544,7 +544,7 @@ class PrometheusScraperMixin(object):
         except requests.HTTPError:
             response.close()
             if health_service_check:
-                self._submit_service_check(
+                self.service_check(
                     service_check_name,
                     AgentCheck.CRITICAL,
                     tags=service_check_tags
@@ -597,32 +597,34 @@ class PrometheusScraperMixin(object):
         `custom_tags` is an array of 'tag:value' that will be added to the
         metric when sending the gauge to Datadog.
         """
-        custom_tags = scraper_config['custom_tags']
         send_histograms_buckets = scraper_config['send_histograms_buckets']
-        
+
         if message.type < len(self.METRIC_TYPES):
             for metric in message.metric:
                 custom_hostname = self._get_hostname(hostname, metric)
                 if message.type == 0:
                     val = getattr(metric, self.METRIC_TYPES[message.type]).value
                     if self._is_value_valid(val):
-                        if send_monotonic_counter:
-                            self._submit_monotonic_count(metric_name, val, metric, custom_tags, custom_hostname)
+                        # Determine the tags to send
+                        tags = self._metric_tags(metric_name, val, metric, scraper_config, hostname=custom_hostname)
+                        if scraper_config['send_monotonic_counter']:
+                            self.monotonic_count(metric_name, val, tags=tags, hostname=custom_hostname)
                         else:
-                            self._submit_gauge(metric_name, val, metric, custom_tags, custom_hostname)
+                            self.gauge(metric_name, val, tags=tags, hostname=custom_hostname)
                     else:
                         self.log.debug("Metric value is not supported for metric {}.".format(metric_name))
                 elif message.type == 4:
-                    self._submit_gauges_from_histogram(metric_name, metric, send_histograms_buckets, custom_tags, custom_hostname)
+                    tags = self._metric_tags(metric_name, val, metric, scraper_config, hostname=custom_hostname)
+                    self._submit_gauges_from_histogram(metric_name, metric, scraper_config, tags=tags, hostname=custom_hostname)
                 elif message.type == 2:
-                    self._submit_gauges_from_summary(metric_name, metric, custom_tags, custom_hostname)
+                    self._submit_gauges_from_summary(metric_name, metric, scraper_config, custom_hostname)
                 else:
                     val = getattr(metric, self.METRIC_TYPES[message.type]).value
                     if self._is_value_valid(val):
                         if message.name in self.rate_metrics:
-                            self._submit_rate(metric_name, val, metric, custom_tags, custom_hostname)
+                            self.rate(metric_name, val, tags=tags, hostname=custom_hostname)
                         else:
-                            self._submit_gauge(metric_name, val, metric, custom_tags, custom_hostname)
+                            self.gauge(metric_name, val, tags=tags, hostname=custom_hostname)
                     else:
                         self.log.debug("Metric value is not supported for metric {}.".format(metric_name))
 
@@ -640,56 +642,69 @@ class PrometheusScraperMixin(object):
 
         return hostname
 
-    def _submit_gauges_from_summary(self, name, metric, custom_tags=None, hostname=None):
+    def _submit_gauges_from_summary(self, metric_name, metric, scraper_config, custom_hostname=None):
         """
         Extracts metrics from a prometheus summary metric and sends them as gauges
         """
-        if custom_tags is None:
-            custom_tags = []
         # summaries do not have a value attribute
         val = getattr(metric, self.METRIC_TYPES[2]).sample_count
         if self._is_value_valid(val):
-            self._submit_gauge('{}.count'.format(name), val, metric, custom_tags)
+            tags = self._metric_tags(metric_name, val, metric, scraper_config, custom_hostname)
+            self.gauge('{}.count'.format(metric_name), val, metric, tags=tags, hostname=custom_hostname)
         else:
-            self.log.debug("Metric value is not supported for metric {}.count.".format(name))
+            self.log.debug("Metric value is not supported for metric {}.count.".format(metric_name))
         val = getattr(metric, self.METRIC_TYPES[2]).sample_sum
         if self._is_value_valid(val):
-            self._submit_gauge('{}.sum'.format(name), val, metric, custom_tags)
+            tags = self._metric_tags(metric_name, val, metric, scraper_config, hostname=custom_hostname)
+            self.gauge('{}.sum'.format(metric_name), val, metric, tags=tags, hostname=custom_hostname)
         else:
-            self.log.debug("Metric value is not supported for metric {}.sum.".format(name))
+            self.log.debug("Metric value is not supported for metric {}.sum.".format(metric_name))
         for quantile in getattr(metric, self.METRIC_TYPES[2]).quantile:
             val = quantile.value
             limit = quantile.quantile
             if self._is_value_valid(val):
-                self._submit_gauge('{}.quantile'.format(name), val, metric, custom_tags=custom_tags+['quantile:{}'.format(limit)], hostname=hostname)
+                tags = self._metric_tags(metric_name, val, metric, scraper_config, hostname=custom_hostname) + ['quantile:{}'.format(limit)]
+                self.gauge('{}.quantile'.format(metric_name), val, metric, tags=tags, custom_hostname=custom_hostname)
             else:
-                self.log.debug("Metric value is not supported for metric {}.quantile.".format(name))
+                self.log.debug("Metric value is not supported for metric {}.quantile.".format(metric_name))
 
-    def _submit_gauges_from_histogram(self, name, metric, send_histograms_buckets=True, custom_tags=None, hostname=None):
+    def _submit_gauges_from_histogram(self, metric_name, metric, scraper_config, custom_hostname=None):
         """
         Extracts metrics from a prometheus histogram and sends them as gauges
         """
-        if custom_tags is None:
-            custom_tags = []
         # histograms do not have a value attribute
         val = getattr(metric, self.METRIC_TYPES[4]).sample_count
         if self._is_value_valid(val):
-            self._submit_gauge('{}.count'.format(name), val, metric, custom_tags)
+            tags = self._metric_tags(metric_name, val, metric, scraper_config, hostname=custom_hostname)
+            self.gauge('{}.count'.format(metric_name), val, metric, tags=tags, hostname=custom_hostname)
         else:
-            self.log.debug("Metric value is not supported for metric {}.count.".format(name))
+            self.log.debug("Metric value is not supported for metric {}.count.".format(metric_name))
         val = getattr(metric, self.METRIC_TYPES[4]).sample_sum
         if self._is_value_valid(val):
-            self._submit_gauge('{}.sum'.format(name), val, metric, custom_tags)
+            tags = self._metric_tags(metric_name, val, metric, scraper_config, hostname=custom_hostname)
+            self.gauge('{}.sum'.format(metric_name), val, metric, tags=tags, hostname=custom_hostname)
         else:
-            self.log.debug("Metric value is not supported for metric {}.sum.".format(name))
-        if send_histograms_buckets:
+            self.log.debug("Metric value is not supported for metric {}.sum.".format(metric_name))
+        if scraper_config['send_histograms_buckets']:
             for bucket in getattr(metric, self.METRIC_TYPES[4]).bucket:
                 val = bucket.cumulative_count
                 limit = bucket.upper_bound
                 if self._is_value_valid(val):
-                    self._submit_gauge('{}.count'.format(name), val, metric, custom_tags=custom_tags+['upper_bound:{}'.format(limit)], hostname=hostname)
+                    tags = self._metric_tags(metric_name, val, metric, scraper_config, hostname=custom_hostname) + ['upper_bound:{}'.format(limit)]
+                    self.gauge('{}.count'.format(metric_name), val, tags=tags, hostname=custom_hostname)
                 else:
-                    self.log.debug("Metric value is not supported for metric {}.count.".format(name))
+                    self.log.debug("Metric value is not supported for metric {}.count.".format(metric_name))
+
+    def _metric_tags(self, metric_name, val, metric, scraper_config, hostname=None):
+        custom_tags = scraper_config['custom_tags']
+        _tags = list(custom_tags)
+        for label in metric.label:
+            if label.name not in scraper_config['exclude_labels']:
+                tag_name = label.name
+                if label.name in scraper_config['labels_mapper']:
+                    tag_name = scraper_config['labels_mapper'][label.name]
+                _tags.append('{}:{}'.format(tag_name, label.value))
+        return self._finalize_tags_to_submit(_tags, metric_name, val, metric, custom_tags=custom_tags, hostname=hostname)
 
     def _is_value_valid(self, val):
         return not (isnan(val) or isinf(val))

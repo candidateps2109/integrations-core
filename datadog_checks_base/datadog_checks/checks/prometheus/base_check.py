@@ -104,23 +104,12 @@ class GenericPrometheusCheck(PrometheusScraperMixin, AgentCheck):
         _tags = self._metric_tags(metric_name, val, metric, custom_tags, hostname)
         self.monotonic_count('{}.{}'.format(self.NAMESPACE, metric_name), val, _tags, hostname=hostname)
 
-    def _metric_tags(self, metric_name, val, metric, scraper_config, hostname=None):
-        custom_tags = scraper_config['custom_tags']
-        _tags = list(custom_tags)
-        for label in metric.label:
-            if label.name not in scraper_config['exclude_labels']:
-                tag_name = label.name
-                if label.name in scraper_config['labels_mapper']:
-                    tag_name = scraper_config['labels_mapper'][label.name]
-                _tags.append('{}:{}'.format(tag_name, label.value))
-        return self._finalize_tags_to_submit(_tags, metric_name, val, metric, custom_tags=custom_tags, hostname=hostname)
-
     def _submit_service_check(self, *args, **kwargs):
         self.service_check(*args, **kwargs)
 
     def _finalize_tags_to_submit(self, _tags, metric_name, val, metric, custom_tags=None, hostname=None):
         """
         Format the finalized tags
-        This is generally a noop, but it can be used to hook into _submit_gauge and change the tags before sending
+        This is generally a noop, but it can be used to change the tags before sending metrics
         """
         return _tags
