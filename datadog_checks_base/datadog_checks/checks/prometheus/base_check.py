@@ -41,7 +41,8 @@ class GenericPrometheusCheck(PrometheusScraperMixin, AgentCheck):
 
         # Set up the config map
         for instance in instances:
-            self.get_scraper_config(instance)
+            endpoint = instance.get("prometheus_url", None)
+            self.get_scraper_config(endpoint, instance)
 
     def check(self, instance):
         endpoint = instance.get("prometheus_url", None)

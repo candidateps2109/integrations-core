@@ -41,7 +41,7 @@ class PrometheusScraperMixin(object):
     def __init__(self, *args, **kwargs):
 
         # Initialize AgentCheck's base class
-        super().__init__(*args, **kwargs)
+        super(PrometheusScraperMixin, self).__init__(*args, **kwargs)
 
         # message.type is the index in this array
         # see: https://github.com/prometheus/client_model/blob/master/ruby/lib/prometheus/client/model/metrics.pb.rb
@@ -191,8 +191,8 @@ class PrometheusScraperMixin(object):
         config['prometheus_timeout'] = instance.get(default_instance.get('prometheus_timeout', 10))
 
         # Authentication used when polling endpoint
-        config['username'] = instance.get('username', default_instance('username', None))
-        config['password'] = instance.get('password', default_instance('password', None))
+        config['username'] = instance.get('username', default_instance.get('username', None))
+        config['password'] = instance.get('password', default_instance.get('password', None))
 
         # Custom tags that will be sent with each metric
         config['custom_tags'] = instance.get('tags', [])
@@ -517,7 +517,7 @@ class PrometheusScraperMixin(object):
 
         # Should we send a service check for when we make a request
         health_service_check = scraper_config['health_service_check']
-        service_check_name = '{}{}'.format(self.NAMESPACE, '.prometheus.health')
+        service_check_name = '{}{}'.format(scraper_config['NAMESPACE'], '.prometheus.health')
         service_check_tags = scraper_config['custom_tags'] + ['endpoint:' + endpoint]
         try:
             response = self.send_request(endpoint, pFormat, headers)
